@@ -12,6 +12,7 @@ from functools import lru_cache
 from itertools import product
 from math import inf
 import sys
+from time import perf_counter
 
 
 @dataclass(frozen=True)
@@ -119,11 +120,19 @@ class FortDP:
             self.t = sum(self.attack_costs) + 1
             self.unreachable = self.t + 1
         self.stats = {"operations": 0, "max_entries": 0, "pairs": 0,
+                      "max_entries_before_prune": 0, "retained_entries_total": 0,
+                      "dominance_seconds": 0.0,
                       "max_by_boundary": {0: 0, 1: 0, 2: 0}}
 
     def finish(self, table):
+        self.stats["max_entries_before_prune"] = max(
+            self.stats["max_entries_before_prune"], len(table.entries)
+        )
         if self.dominance:
+            start = perf_counter()
             table.entries = self.prune(table.entries)
+            self.stats["dominance_seconds"] += perf_counter() - start
+        self.stats["retained_entries_total"] += len(table.entries)
         self.stats["operations"] += 1
         self.stats["max_entries"] = max(self.stats["max_entries"], len(table.entries))
         b = len(table.boundary)
@@ -314,12 +323,32 @@ def _build_cactus_table(n, edges, dp):
     return final
 
 
-def solve_cactus(n, edges, costs=None, allowed=None, failures=1, dominance=False):
-    """Return optimal cost, sensor list, and instrumentation; inf if infeasible."""
+def solve_cactus(n, edges, costs=None, allowed=None, failures=1, dominance=False,
+                 *, precheck=True):
+    """Return optimal cost, sensor list, and instrumentation; inf if infeasible.
+
+    By default, first compute the unit-cost attack margin of all permitted
+    locations. An infeasible budget returns immediately with a fort certificate
+    in stats['infeasibility_certificate']; a feasible budget is never reduced.
+    Set precheck=False only to measure or verify the raw optimization DP.
+    Both edges and allowed may be one-pass iterables.
+    """
+    edges = list(edges)
     costs = [1] * n if costs is None else list(costs)
     if len(costs) != n:
         raise ValueError("One cost per vertex is required")
     dp = FortDP(costs, allowed, failures, dominance)
+    dp.stats.update(feasibility_margin=None, precheck_seconds=0.0,
+                    precheck_rejected=False, infeasibility_certificate=None)
+    if precheck:
+        start = perf_counter()
+        attack = minimum_failure_cost(n, edges, dp.allowed, certificate=True)
+        dp.stats["precheck_seconds"] = perf_counter() - start
+        dp.stats["feasibility_margin"] = attack["cost"]
+        if failures >= attack["cost"]:
+            dp.stats["precheck_rejected"] = True
+            dp.stats["infeasibility_certificate"] = attack
+            return inf, [], dp.stats
     final = _build_cactus_table(n, edges, dp)
     answers = [val for (_, p), val in final.entries.items() if p[0] == dp.t]
     if not answers:

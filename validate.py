@@ -110,6 +110,7 @@ def check(n, edges, costs, allowed, failures, dominance=False):
     sensor_mask = sum(1 << v for v in sensors)
     assert cost == exact, (n, edges, costs, allowed, failures, exact, cost, sensors)
     assert cost == math.inf or sensor_mask in witnesses
+    stats['feasible'] = cost != math.inf
     return stats
 
 
@@ -137,13 +138,15 @@ def exhaustive(max_n=6):
 
 def random_checks(repetitions=200, seed=20261018):
     rng, comparisons, start = random.Random(seed), 0, time.perf_counter()
+    by_budget = {str(k): {'feasible': 0, 'infeasible': 0} for k in range(4)}
     for i in range(repetitions):
         n = rng.randint(3, 10)
         edges = random_cactus(n, rng)
         costs = [rng.randint(0, 20) for _ in range(n)]
         allowed = {v for v in range(n) if rng.random() > 0.2}
         for k in range(4):
-            check(n, edges, costs, allowed, k, dominance=(i % 2 == 0))
+            stats = check(n, edges, costs, allowed, k, dominance=(i % 2 == 0))
+            by_budget[str(k)]['feasible' if stats['feasible'] else 'infeasible'] += 1
             comparisons += 1
     # Every possible permitted set on representative branching/cyclic graphs.
     graphs = [
@@ -158,6 +161,8 @@ def random_checks(repetitions=200, seed=20261018):
                 check(n, edges, list(range(1, n + 1)), allowed, k)
                 comparisons += 1
     return {"seed": seed, "comparisons": comparisons, "mismatches": 0,
+            "random_instances_by_budget": by_budget,
+            "additional_permitted_set_comparisons": comparisons - 4 * repetitions,
             "seconds": time.perf_counter() - start}
 
 
